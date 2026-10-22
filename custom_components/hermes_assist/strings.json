@@ -1,0 +1,51 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to the Hermes bridge",
+        "description": "The Hermes add-on exposes an OpenAI-compatible endpoint that fronts Venice.ai. Enter its address and the bridge token (state/assist_bridge.token in the Hermes profile).",
+        "data": {
+          "url": "Base URL",
+          "token": "Bridge token"
+        },
+        "data_description": {
+          "url": "For example http://0a6523c6-hermes-agent:8787/v1 — the add-on hostname works on the Home Assistant docker network.",
+          "token": "Found on the Hermes side; the bridge rejects unauthenticated calls from other containers."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the Hermes bridge. Is the add-on running and the port open?",
+      "invalid_auth": "The bridge rejected the token.",
+      "unknown": "Unexpected error."
+    },
+    "abort": {
+      "already_configured": "This bridge is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Hermes Assist settings",
+        "description": "Pick the Venice model and tell the assistant how to behave.",
+        "data": {
+          "model": "Model",
+          "prompt": "Instructions",
+          "llm_hass_api": "Control Home Assistant"
+        },
+        "data_description": {
+          "model": "assist = Qwen3 8B (fastest, tool-capable) · assist-smart = GLM 5.3 Flash · assist-heretic = uncensored, tool-capable · assist-uncensored = chat only, no device control.",
+          "prompt": "How the assistant should answer. Supports templates.",
+          "llm_hass_api": "Select which tools the model may use to read state and control devices."
+        }
+      }
+    }
+  },
+  "entity": {
+    "conversation": {
+      "conversation": {
+        "name": "Hermes Assist"
+      }
+    }
+  }
+}
