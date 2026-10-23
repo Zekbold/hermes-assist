@@ -2,7 +2,7 @@
 
 import logging
 
-from homeassistant.const import CONF_LLM_HASS_API, CONF_PROMPT
+from homeassistant.const import CONF_LLM_HASS_API, CONF_MODEL, CONF_PROMPT
 from homeassistant.helpers import llm
 
 DOMAIN = "hermes_assist"

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, override
 
 import openai
 import voluptuous as vol
@@ -30,6 +30,8 @@ from homeassistant.helpers.selector import (
 
 from . import _client
 from .const import (
+    CONF_TOKEN,
+    CONF_URL,
     DEFAULT_MODEL,
     DEFAULT_URL,
     DOMAIN,
@@ -64,7 +66,7 @@ class HermesAssistConfigFlow(ConfigFlow, domain=DOMAIN):
             self._async_abort_entries_match({CONF_URL: user_input[CONF_URL]})
             try:
                 await _async_list_models(
-                    self.hass, user_input["url"], user_input.get("token", "")
+                    self.hass, user_input[CONF_URL], user_input.get(CONF_TOKEN, "")
                 )
             except openai.AuthenticationError:
                 errors["base"] = "invalid_auth"
@@ -84,8 +86,8 @@ class HermesAssistConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=vol.Schema(
                 {
-                    vol.Required("url", default=DEFAULT_URL): str,
-                    vol.Optional("token", default=""): TextSelector(
+                    vol.Required(CONF_URL, default=DEFAULT_URL): str,
+                    vol.Optional(CONF_TOKEN, default=""): TextSelector(
                         TextSelectorConfig(type=TextSelectorType.PASSWORD)
                     ),
                 }
@@ -120,7 +122,7 @@ class HermesAssistOptionsFlow(OptionsFlow):
 
         try:
             models = await _async_list_models(
-                self.hass, entry.data["url"], entry.data.get("token", "")
+                self.hass, entry.data[CONF_URL], entry.data.get(CONF_TOKEN, "")
             )
         except Exception:  # noqa: BLE001 - show the form anyway, with a fixed list
             _LOGGER.warning("Could not list models from the Hermes bridge")

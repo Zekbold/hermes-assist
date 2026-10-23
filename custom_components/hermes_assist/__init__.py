@@ -9,7 +9,7 @@ from typing import Any, cast
 from openai import AsyncOpenAI, AuthenticationError, OpenAIError
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_API_KEY, Platform
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers.httpx_client import get_async_client
@@ -18,7 +18,7 @@ from .const import CONF_TOKEN, CONF_URL, LOGGER
 
 PLATFORMS = [Platform.CONVERSATION]
 
-type HermesAssistConfigEntry = ConfigEntry[AsyncOpenAI]
+HermesAssistConfigEntry = ConfigEntry[AsyncOpenAI]
 
 
 def _client(hass: HomeAssistant, url: str, token: str) -> AsyncOpenAI:
