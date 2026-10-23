@@ -1,13 +1,22 @@
 {
   "domain": "hermes_assist",
   "name": "Hermes Assist",
-  "codeowners": ["@Zekbold"],
+  "codeowners": [
+    "@Zekbold"
+  ],
   "config_flow": true,
-  "dependencies": ["conversation"],
-  "after_dependencies": ["assist_pipeline", "intent"],
+  "dependencies": [
+    "conversation"
+  ],
+  "after_dependencies": [
+    "assist_pipeline",
+    "intent"
+  ],
   "documentation": "https://github.com/Zekbold/hermes-assist",
   "integration_type": "service",
   "iot_class": "local_polling",
-  "requirements": ["openai==3.10.0"],
-  "version": "0.1.0"
+  "requirements": [
+    "openai==3.10.0"
+  ],
+  "version": "0.2.0"
 }
