@@ -16,7 +16,7 @@ from homeassistant.helpers.httpx_client import get_async_client
 
 from .const import CONF_TOKEN, CONF_URL, LOGGER
 
-PLATFORMS = [Platform.CONVERSATION]
+PLATFORMS = [Platform.CONVERSATION, Platform.AI_TASK]
 
 HermesAssistConfigEntry = ConfigEntry[AsyncOpenAI]
 

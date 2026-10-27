@@ -109,6 +109,43 @@ def _convert_content_to_chat_message(
     return None
 
 
+def _append_structure_hint(
+    messages: list[ChatCompletionMessageParam],
+    structure: probatio.Schema,
+    llm_api: llm.APIInstance | None,
+) -> None:
+    """Demand one JSON value matching ``structure`` from the model.
+
+    Sent as user-message text rather than ``response_format``: the entry may
+    front a Venice chat model or the full Hermes agent, and prompt text is the
+    only contract both honour (the agent runtime drops OpenAI request fields
+    it does not use).
+    """
+    document = probatio.to_openapi(
+        structure,
+        custom_serializer=(
+            llm_api.custom_serializer if llm_api else llm.selector_serializer
+        ),
+        openapi_version="3.1.0",
+    )
+    hint = (
+        "\n\nAnswer with a single JSON value and nothing else — no prose, no "
+        "markdown fences, no commentary. It must validate against this JSON "
+        f"schema:\n{json_dumps(document)}"
+    )
+    for message in reversed(messages):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            message["content"] = content + hint
+        elif isinstance(content, list):
+            content.append({"type": "text", "text": hint})
+        else:
+            message["content"] = hint
+        return
+
+
 def _decode_tool_arguments(arguments: str) -> Any:
     """Decode tool call arguments."""
     try:
@@ -194,11 +231,26 @@ class HermesAssistEntity(Entity):
         """Return the model alias configured for this entry."""
         return self.entry.options.get(CONF_MODEL, "assist")
 
-    async def _async_handle_chat_log(self, chat_log: conversation.ChatLog) -> None:
-        """Generate an answer for the chat log."""
+    async def _async_handle_chat_log(
+        self,
+        chat_log: conversation.ChatLog,
+        *,
+        structure: probatio.Schema | None = None,
+        max_tokens: int | None = None,
+        extra_headers: dict[str, str] | None = None,
+        client: Any | None = None,
+    ) -> None:
+        """Generate an answer for the chat log.
+
+        ``structure`` switches the turn into AI Task data generation: the
+        response must be one JSON value matching that schema. The requirement
+        is sent as prompt text rather than ``response_format`` because the
+        bridges front very different backends (Venice chat models and the full
+        Hermes agent), and prompt text is the only contract they all honour.
+        """
         model_args: dict[str, Any] = {
             "model": self.model,
-            "max_tokens": MAX_TOKENS,
+            "max_tokens": max_tokens or MAX_TOKENS,
             "extra_body": {"venice_parameters": VENICE_PARAMETERS},
         }
 
@@ -234,11 +286,16 @@ class HermesAssistEntity(Entity):
                 *files,
             ]
 
-        client = self.entry.runtime_data
+        if structure is not None:
+            _append_structure_hint(model_args["messages"], structure, chat_log.llm_api)
+
+        chat_client: Any = client if client is not None else self.entry.runtime_data
 
         for _iteration in range(MAX_TOOL_ITERATIONS):
             try:
-                result = await client.chat.completions.create(**model_args)
+                result = await chat_client.chat.completions.create(
+                    **model_args, extra_headers=extra_headers
+                )
             except openai.OpenAIError as err:
                 LOGGER.error("Error talking to the Hermes bridge: %s", err)
                 raise HomeAssistantError("Error talking to the Hermes bridge") from err

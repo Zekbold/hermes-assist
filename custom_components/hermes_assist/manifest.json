@@ -6,7 +6,8 @@
   ],
   "config_flow": true,
   "dependencies": [
-    "conversation"
+    "conversation",
+    "ai_task"
   ],
   "after_dependencies": [
     "assist_pipeline",
@@ -18,5 +19,5 @@
   "requirements": [
     "openai==3.10.0"
   ],
-  "version": "0.2.0"
+  "version": "0.3.0"
 }

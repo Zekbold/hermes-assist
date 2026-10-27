@@ -42,3 +42,12 @@ MAX_TOOL_ITERATIONS = 5
 
 # Spoken answers, not essays. Also caps a runaway reasoning model.
 MAX_TOKENS = 600
+
+# AI Task data generation produces JSON (or a short report), not a spoken
+# sentence, so it needs a bigger ceiling than an Assist turn.
+MAX_TOKENS_AI_TASK = 2000
+
+# Seconds of patience. A Venice chat turn is seconds; a full Vulcan agent turn
+# (tools, files, skills) is tens of seconds, and an image can take minutes.
+DATA_TIMEOUT = 240.0
+IMAGE_TIMEOUT = 300.0
