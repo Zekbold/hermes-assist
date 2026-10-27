@@ -34,6 +34,33 @@ api.venice.ai  (private / E2EE text models)
 * Every Assist request is logged on the Hermes side (`logs/venice-bridge.log`), which is
   where a slow or failing voice command is actually diagnosable.
 
+## AI Task: data + image generation
+
+The same integration now provides an **AI Task** entity (`ai_task.<device>_ai_task_<model>`),
+so `ai_task.generate_data` and `ai_task.generate_image` work from automations, scripts and
+the dashboard, and Home Assistant's *Settings → Devices & services → AI Task* preferences can
+point at it.
+
+| service | endpoint on the bridge | backend |
+|---|---|---|
+| `generate_data` | `POST <url>/chat/completions` | the entry's model — pointed at the Vulcan bridge that is the full Hermes agent, with its tools, files and skills |
+| `generate_image` | `POST <url>/images/generations` | Venice, **quota-included models only** (policy in the add-on's `tools/ha-bridge/image_support.py`) |
+
+Notes that matter:
+
+* **Structured tasks** (`structure:` given) get the JSON schema appended to the instructions.
+  The reply is parsed tolerantly (code fences and stray prose are stripped) and fails loudly
+  if it is not JSON. The schema is *not* sent as `response_format` because the agent runtime
+  ignores OpenAI request fields it does not use.
+* **Images never cost credits.** `model: auto` resolves to a private, flat-priced model from
+  the live Venice catalogue; an unknown model name falls back to the same set instead of a
+  per-image billed one. The image is returned as bytes and stored by Home Assistant under
+  `media-source://ai_task/image/...`, exactly like a core integration.
+* AI Task requests carry `X-Hermes-Surface: ai-task`, which stops the Vulcan bridge treating
+  wording like "send to" in machine instructions as a Telegram handoff request.
+* `generate_image` requires `entity_id` in the service schema (core's rule, not ours);
+  `generate_data` falls back to the preferred entity set in the AI Task settings.
+
 ## Install (HACS)
 
 1. HACS → Integrations → ⋮ → Custom repositories → `https://github.com/Zekbold/hermes-assist`,
