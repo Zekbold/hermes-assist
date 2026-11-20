@@ -32,6 +32,7 @@ from homeassistant.components import ai_task, conversation
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.json import json_dumps
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import HermesAssistConfigEntry
@@ -81,6 +82,93 @@ def _extract_json(text: str) -> Any:
     raise ValueError(f"reply is not JSON: {text[:300]}")
 
 
+def _read_image_base64(path: Any) -> str:
+    """Encode an attachment image off the event loop."""
+    with open(path, "rb") as fh:
+        return base64.b64encode(fh.read()).decode("ascii")
+
+
+def _as_noul_answer(answer: dict[str, Any], question: dict[str, Any], qid: str) -> Any:
+    """Coerce the model's reply into a NoulAnswer."""
+    value = answer.get("noul", answer.get("value", answer.get("score")))
+    try:
+        probability = float(value)
+    except (TypeError, ValueError) as err:
+        raise HomeAssistantError(
+            f"Hermes answer for '{qid}' is not a probability: {value!r}"
+        ) from err
+    probability = min(1.0, max(0.0, probability))
+    return ai_task.NoulAnswer(noul=probability)
+
+
+def _as_choice_answer(answer: dict[str, Any], question: dict[str, Any], qid: str) -> Any:
+    """Coerce the model's reply into a ChoiceAnswer."""
+    options = list(question["criteria"])
+    chosen = answer.get("choice", answer.get("value"))
+    if chosen not in options:
+        matches = [opt for opt in options if str(chosen).strip().lower() == opt.lower()]
+        if len(matches) == 1:
+            chosen = matches[0]
+        else:
+            raise HomeAssistantError(
+                f"Hermes picked '{chosen}' for '{qid}' but options are {options}"
+            )
+    raw = answer.get("probabilities")
+    probabilities: dict[str, float] = {}
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            try:
+                probabilities[str(key)] = max(0.0, min(1.0, float(value)))
+            except (TypeError, ValueError):
+                continue
+    if chosen not in probabilities:
+        probabilities[chosen] = 1.0
+    for opt in options:
+        probabilities.setdefault(opt, 0.0)
+    total = sum(probabilities.values())
+    if total <= 0:
+        probabilities = {opt: 1.0 / len(options) for opt in options}
+    else:
+        probabilities = {key: value / total for key, value in probabilities.items()}
+    return ai_task.ChoiceAnswer(choice=chosen, probabilities=probabilities)
+
+
+def _as_score_answer(answer: dict[str, Any], question: dict[str, Any], qid: str) -> Any:
+    """Coerce the model's reply into a ScoreAnswer."""
+    criteria = list(question["criteria"])
+    top = len(criteria) - 1
+    value = answer.get("score", answer.get("index", answer.get("value")))
+    try:
+        score = float(value)
+    except (TypeError, ValueError) as err:
+        # Accept a named level too.
+        try:
+            score = float(criteria.index(str(value).strip()))
+        except (ValueError, AttributeError) as inner:
+            raise HomeAssistantError(
+                f"Hermes answer for '{qid}' is not a level index: {value!r}"
+            ) from inner
+    score = min(float(top), max(0.0, score))
+    raw = answer.get("probabilities")
+    probabilities: list[float] = []
+    if isinstance(raw, list):
+        for item in raw:
+            try:
+                probabilities.append(max(0.0, min(1.0, float(item))))
+            except (TypeError, ValueError):
+                continue
+    while len(probabilities) < len(criteria):
+        probabilities.append(0.0)
+    probabilities = probabilities[: len(criteria)]
+    if sum(probabilities) <= 0:
+        index = int(round(score))
+        probabilities = [1.0 if i == index else 0.0 for i in range(len(criteria))]
+    else:
+        total = sum(probabilities)
+        probabilities = [value / total for value in probabilities]
+    return ai_task.ScoreAnswer(score=score, probabilities=probabilities)
+
+
 class HermesAssistAITaskEntity(ai_task.AITaskEntity, HermesAssistEntity):
     """Generate data and images through a Hermes bridge."""
 
@@ -88,6 +176,7 @@ class HermesAssistAITaskEntity(ai_task.AITaskEntity, HermesAssistEntity):
         ai_task.AITaskEntityFeature.GENERATE_DATA
         | ai_task.AITaskEntityFeature.SUPPORT_ATTACHMENTS
         | ai_task.AITaskEntityFeature.GENERATE_IMAGE
+        | ai_task.AITaskEntityFeature.EVALUATE
     )
 
     def __init__(self, entry: HermesAssistConfigEntry) -> None:
@@ -204,3 +293,117 @@ class HermesAssistAITaskEntity(ai_task.AITaskEntity, HermesAssistEntity):
             mime_type=result.get("mime_type") or "image/png",
             model=result.get("model"),
         )
+
+    @override
+    async def _async_evaluate(
+        self, task: ai_task.EvaluationTask
+    ) -> ai_task.EvaluationTaskResult:
+        """Answer decision questions with one structured chat completion.
+
+        Mirrors the shape of core's Decisions API without needing it: noul
+        questions return a probability, choice questions a selected value with
+        a distribution, score questions a level index with a distribution.
+        """
+        if not task.questions:
+            raise HomeAssistantError("Evaluation task has no questions")
+
+        parts: list[dict[str, Any]] = []
+        state_text = task.state if isinstance(task.state, str) else json_dumps(task.state)
+        if state_text:
+            parts.append({"type": "text", "text": f"State to evaluate:\n{state_text}"})
+        for attachment in task.attachments or []:
+            mime_type = attachment.mime_type.partition(";")[0].strip().lower()
+            if mime_type == "image/jpg":
+                mime_type = "image/jpeg"
+            if mime_type not in ("image/png", "image/jpeg", "image/webp", "image/gif"):
+                raise HomeAssistantError(
+                    "Evaluations only support JPEG, PNG, WebP and GIF image "
+                    f"attachments; received {attachment.mime_type}"
+                )
+            try:
+                encoded = await self.hass.async_add_executor_job(
+                    _read_image_base64, attachment.path
+                )
+            except OSError as err:
+                raise HomeAssistantError(
+                    "Unable to read evaluation attachment"
+                ) from err
+            parts.append(
+                {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{encoded}"}}
+            )
+
+        lines = [
+            "Answer every question about the supplied state and attachments.",
+            "Reply with ONLY a JSON object of the form:",
+            '{"answers": {"<question_id>": ...}, where each answer is:',
+            '- noul question: {"noul": <probability between 0 and 1>}',
+            '- choice question: {"choice": "<one option value>", "probabilities": {"<option value>": <weight>}}',
+            '- score question: {"score": <level index, 0-based>, "probabilities": [<weight per level>]}',
+            "Weight/probability values must be numbers between 0 and 1.",
+            "Questions:",
+        ]
+        for qid, question in task.questions.items():
+            if question["type"] == "noul":
+                lines.append(f'- {qid} (noul): {question["instructions"]}')
+            elif question["type"] == "choice":
+                lines.append(
+                    f'- {qid} (choice, pick one of {sorted(question["criteria"])}): '
+                    f'{question["instructions"]}'
+                )
+            else:
+                criteria = list(question["criteria"])
+                lines.append(
+                    f'- {qid} (score, levels 0..{len(criteria) - 1} where '
+                    f'{criteria}): {question["instructions"]}'
+                )
+        parts.append({"type": "text", "text": "\n".join(lines)})
+
+        base = self.entry.data[CONF_URL].rstrip("/")
+        token = self.entry.data.get(CONF_TOKEN, "")
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": parts}],
+            "max_tokens": MAX_TOKENS_AI_TASK,
+        }
+        headers = {"Authorization": f"Bearer {token}", **AI_TASK_HEADERS}
+
+        session = async_get_clientsession(self.hass)
+        try:
+            async with session.post(
+                f"{base}/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=DATA_TIMEOUT),
+            ) as response:
+                body = await response.text()
+                status = response.status
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+            raise HomeAssistantError(f"Could not reach the Hermes endpoint: {err}") from err
+        if status != 200:
+            LOGGER.error("Hermes evaluation returned %s: %s", status, body[:400])
+            raise HomeAssistantError(f"Hermes evaluation returned {status}: {body[:200]}")
+
+        try:
+            content = loads(body)["choices"][0]["message"]["content"] or ""
+        except (JSONDecodeError, KeyError, IndexError, TypeError) as err:
+            LOGGER.error("Unusable evaluation response: %s", body[:400])
+            raise HomeAssistantError("Hermes returned no usable evaluation") from err
+
+        try:
+            answers = _extract_json(content)["answers"]
+        except (ValueError, KeyError, TypeError) as err:
+            LOGGER.error("Evaluation answer is not JSON: %s", content[:400])
+            raise HomeAssistantError("Hermes evaluation reply was not JSON") from err
+
+        result: dict[str, ai_task.EvaluationAnswer] = {}
+        for qid, question in task.questions.items():
+            answer = answers.get(qid)
+            if not isinstance(answer, dict):
+                raise HomeAssistantError(f"Hermes gave no answer for question '{qid}'")
+            if question["type"] == "noul":
+                result[qid] = _as_noul_answer(answer, question, qid)
+            elif question["type"] == "choice":
+                result[qid] = _as_choice_answer(answer, question, qid)
+            else:
+                result[qid] = _as_score_answer(answer, question, qid)
+        return ai_task.EvaluationTaskResult(answers=result)
